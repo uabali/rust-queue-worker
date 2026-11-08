@@ -9,11 +9,12 @@ pub mod metrics;
 pub mod queue;
 pub mod worker;
 
-pub use backoff::{delay_after_failure, delay_without_jitter, BackoffConfig};
+pub use backoff::{BackoffConfig, delay_after_failure, delay_without_jitter};
 pub use job::Job;
 pub use metrics::{Metrics, MetricsSnapshot};
-pub use queue::{bounded, EnqueueError, JobReceiver, JobSender, TryEnqueueError};
+pub use queue::{EnqueueError, JobReceiver, JobSender, TryEnqueueError, bounded};
 pub use worker::{
-    join_workers, new_dead_letter, new_pending, process_job, spawn_pool, DeadLetter, Pending,
-    ProcessResult, WorkerPoolConfig,
+    DeadLetter, Pending, ProcessResult, ProducerDone, WorkerPoolConfig, join_workers,
+    mark_producer_finished, new_dead_letter, new_pending, new_producer_done, process_job,
+    spawn_pool,
 };

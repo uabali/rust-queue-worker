@@ -10,8 +10,8 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use rust_queue_worker::{
-    bounded, join_workers, new_dead_letter, new_pending, spawn_pool, BackoffConfig, Job, Metrics,
-    WorkerPoolConfig,
+    BackoffConfig, Job, Metrics, WorkerPoolConfig, bounded, join_workers, mark_producer_finished,
+    new_dead_letter, new_pending, new_producer_done, spawn_pool,
 };
 
 #[derive(Parser, Debug)]
@@ -112,6 +112,7 @@ async fn run_demo(
     let metrics = Metrics::new();
     let dead_letter = new_dead_letter();
     let pending = new_pending();
+    let producer_done = new_producer_done();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let (tx, rx) = bounded(queue_capacity);
@@ -129,11 +130,7 @@ async fn run_demo(
 
     info!(
         workers,
-        jobs,
-        fail_rate,
-        max_attempts,
-        queue_capacity,
-        "starting demo"
+        jobs, fail_rate, max_attempts, queue_capacity, "starting demo"
     );
 
     let handles = spawn_pool(
@@ -142,27 +139,34 @@ async fn run_demo(
         metrics.clone(),
         dead_letter.clone(),
         pending.clone(),
+        producer_done.clone(),
         shutdown_tx.clone(),
         shutdown_rx,
         pool_cfg,
     );
 
+    let mut enqueue_error = None;
     for i in 0..jobs {
         let payload = format!("job-{i}");
         pending.fetch_add(1, Ordering::SeqCst);
-        tx.enqueue(Job::new(payload, max_attempts)).await?;
+        if let Err(err) = tx.enqueue(Job::new(payload, max_attempts)).await {
+            // The job never entered the queue; don't leave pending stuck above 0.
+            pending.fetch_sub(1, Ordering::SeqCst);
+            enqueue_error = Some(err);
+            break;
+        }
         metrics.enqueued.fetch_add(1, Ordering::Relaxed);
     }
 
     // No more new work from the producer. Workers keep `retry_tx` for retries.
+    // Shutdown waits for this flag AND pending==0, so a fast worker cannot
+    // close the channel between submissions.
     drop(tx);
-
-    // If zero jobs were enqueued, shut down immediately.
-    if jobs == 0 {
-        let _ = shutdown_tx.send(true);
-    }
-
+    mark_producer_finished(&pending, &producer_done, &shutdown_tx);
     join_workers(handles).await;
+    if let Some(err) = enqueue_error {
+        return Err(err.into());
+    }
 
     let snap = metrics.snapshot();
     let dl = dead_letter.lock().await;
