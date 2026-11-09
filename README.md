@@ -24,7 +24,7 @@ producer (CLI) ──enqueue──► bounded mpsc queue ◄──retry── wo
 | `metrics` | Counters: enqueued / processed / succeeded / failed / retries / dead_lettered |
 
 **Backpressure:** queue capacity is bounded.  
-**Shutdown:** a `pending` counter tracks unfinished jobs; when it hits zero, workers exit via a `watch` channel.
+**Shutdown:** `pending` counts unfinished jobs. Workers exit only after the producer calls `mark_producer_finished` AND `pending` is 0. Exiting on `pending == 0` alone drops later jobs: a fast worker can finish the first job and close the channel before the next `enqueue`.
 
 ## Requirements
 
@@ -57,8 +57,9 @@ cargo test
 ## Notes
 
 - Failures are simulated via `--fail-rate` (no external I/O).
-- Queue is not durable — restart loses in-flight jobs.
+- Queue is not durable — restart loses in-flight jobs. There is no broker, ack, or reclaim.
 - Retries run on detached tasks (sleep, then re-enqueue). Sleeping inline on the same bounded channel can deadlock when the queue is full.
+- `cargo test` covers queue bounds, backoff math, the early-shutdown loss above, and exhausted retries on a capacity-1 queue. It does not measure latency and it is not a production worker.
 
 ## License
 
